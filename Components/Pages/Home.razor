@@ -1,0 +1,110 @@
+﻿@page "/"
+@using StudyCallAIApi.Components.Func
+@inject IJSRuntime JS
+@inject HttpClient Http
+@inject IHttpClientFactory HttpClientFactory
+@rendermode InteractiveServer
+
+<div class="chat-container">
+    <div class="chat-header">
+        <span class="title">Azure OpenAI を利用したチャット</span>
+    </div>
+
+    <div class="chat-messages" @ref="messagesDiv">
+        @foreach (var msg in Messages)
+        {
+            <div class="message-row @(msg.IsUser ? "user" : "bot")">
+                <div class="bubble @(msg.IsThinking ? "thinking" : "")">
+                    @msg.Text
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="chat-input-area">
+        <input type="text" required maxlength="600" @bind=@_userInput placeholder="メッセージを入力" />
+        <button disabled=@_IsBtnDisabled @onclick="SendMessage">送信</button>
+    </div>
+</div>
+
+@code {
+    private ElementReference messagesDiv;  
+    private List<ChatMsg> Messages = new();
+    private bool _IsBtnDisabled = false; // 送信ボタン有効無効
+    private string _userInput = ""; //ユーザー入力文字列
+    private const string ConstThink = "考え中...";
+    private const string ConstApiChat = "/api/chat";
+    private const string ConstErrMsg = "エラーが発生しました。";
+
+    private async Task SendMessage()
+    {
+        // ユーザー入力値のトリムと空チェック、空の場合は処理を抜ける
+        string strUserInput = _userInput.Trim();
+        if (string.IsNullOrEmpty(strUserInput)) return;
+
+        _IsBtnDisabled = true; // 送信ボタンを無効化
+
+        // ユーザーのメッセージ追加
+        Messages.Add(new ChatMsg(strUserInput, true));
+        _userInput = "";
+
+        // 「考え中...」を追加
+        var strThinking = new ChatMsg(ConstThink, false, true);
+        Messages.Add(strThinking);
+        await ScrollToBottom();
+        StateHasChanged();
+
+        try
+        {
+            // API 呼び出し
+            var client = HttpClientFactory.CreateClient("local");
+
+            using var response = await client.PostAsJsonAsync(
+                ConstApiChat,
+                new { message = strUserInput }
+            );
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                Messages.Remove(strThinking);
+                Messages.Add(new ChatMsg(ConstErrMsg, false));
+                return;
+            }
+
+            var json = await response.Content.ReadFromJsonAsync<ChatResp>();
+
+
+            // 「考え中...」を削除
+            Messages.Remove(strThinking);
+
+            // Bot の返答追加
+            if (json != null && json.reply != null)
+            {
+
+                Messages.Add(new ChatMsg(json.reply, false));
+            }
+
+        }
+        catch (Exception ex)
+        {
+#if (DEBUG)
+            System.Diagnostics.Debug.WriteLine(ex.ToString());
+#endif
+            Messages.Remove(strThinking);
+            Messages.Add(new ChatMsg(ConstErrMsg, false));
+        }
+        finally
+        {
+            Messages.Remove(strThinking); // 「考え中...」を削除
+            _IsBtnDisabled = false; // 送信ボタンを有効化
+        }
+
+        await ScrollToBottom();
+    }
+
+    private async Task ScrollToBottom()
+    {
+        await JS.InvokeVoidAsync("scrollToBottom", messagesDiv);
+    }
+}
